@@ -1,8 +1,11 @@
 
 
+
+
 // ***************************************
 // ********** Global Variables ***********
 // ***************************************
+
 
 //Globals for Wifi Setup and OTA
 #include <credentials.h>
@@ -65,7 +68,6 @@ const unsigned long heatPeriod = 180000; //This is the Maximum alloted Drain/Dra
 int protectionBarrier = 0; //Determines the monitoring of the Overfill protection
 int heatBarrier = 0; //Determines the monitoring of the Overheat protection
 int quit = 0;
-float mqttConnectFlag = 0.0;
 unsigned long startMillis;
 unsigned long currentMillis;
 unsigned long startMillisFill;
@@ -79,9 +81,11 @@ int lastT = 0;
 
 
 
+
 // ***************************************
 // *************** Setup *****************
 // ***************************************
+
 
 void setup() {
 
@@ -125,9 +129,11 @@ void setup() {
 
 
 
+
 // ***************************************
 // ************* Da Loop *****************
 // ***************************************
+
 
 void loop() {
 
@@ -142,6 +148,8 @@ void loop() {
   }
 
   //Prevent [Overfilling] by timing out relays
+  //This is disabled because the water pressure changes and Charlit fills less and less until tank refilled
+  /*
   if (protectionBarrier > 0) {
     if (protectionBarrier == 2) {
       Serial.println("**Fill Guardian**");
@@ -164,6 +172,8 @@ void loop() {
       lastT = t;
     }
   }
+  */
+
   //Prevent [Overheating] by timing out relays
   if (heatBarrier > 0) {
     if (heatBarrier == 2) {
@@ -186,7 +196,6 @@ void loop() {
       lastT = t;
     }
   }
-
 
   //State Manager
   Adafruit_MQTT_Subscribe *subscription;
@@ -346,7 +355,6 @@ void loop() {
 
       lastState = currentState;
       currentState = 7;
-
     }
 
     // [2nd Drain]
@@ -418,7 +426,7 @@ void loop() {
         rgbMode = 1;
       }
       else if (rgbMode == 1) { /*Change to WLED*/
-        Serial.println("Entering SP108E Mode");
+        Serial.println("Entering WLED Mode");
         //digitalWrite(r_ledVcc, HIGH);
         //digitalWrite(r_ledGnd, HIGH);
         digitalWrite(r_ledDat, HIGH);
@@ -444,9 +452,11 @@ void loop() {
 
 
 
+
 // ***************************************
 // ********** Backbone Methods ***********
 // ***************************************
+
 
 void rideStop() {
 
@@ -482,9 +492,45 @@ void rideStop() {
   digitalWrite(r_drain, LOW);
 }
 
+void MQTT_connect() {
+
+  int8_t ret;
+  // Stop if already connected.
+  if (mqtt.connected()) {
+    if (mqttConnectFlag == 0) {
+      //Serial.println("Connected");
+      mqttConnectFlag++;
+    }
+    return;
+  }
+  Serial.println("Connecting to MQTT... ");
+  uint8_t retries = 3;
+  while ((ret = mqtt.connect()) != 0) { // connect will return 0 for connected
+    Serial.println(mqtt.connectErrorString(ret));
+    Serial.println("Retrying MQTT connection in 5 seconds...");
+    mqtt.disconnect();
+    delay(5000);  // wait 5 seconds
+    retries--;
+    if (retries == 0) {
+      // basically die and wait for WDT to reset me
+      //while (1);
+      Serial.println("Wait 5 secomds to reconnect");
+      delay(5000);
+    }
+  }
+}
 
 void wifiSetup() {
 
+  //Serial
+  Serial.begin(115200);
+  delay(300);
+  Serial.println();
+  Serial.println();
+  Serial.println("****************************************");
+  Serial.println("Booting");
+
+  //WiFi and OTA
   WiFi.mode(WIFI_STA);
   WiFi.begin(ssid, password);
   while (WiFi.waitForConnectResult() != WL_CONNECTED) {
@@ -492,7 +538,7 @@ void wifiSetup() {
     delay(5000);
     ESP.restart();
   }
-  ArduinoOTA.setHostname("CharlitBrains");
+  ArduinoOTA.setHostname("CharlitPipe-Brains");                                                          /** TODO **/
   ArduinoOTA.onStart([]() {
     String type;
     if (ArduinoOTA.getCommand() == U_FLASH) {
@@ -526,32 +572,4 @@ void wifiSetup() {
   Serial.println("Ready");
   Serial.print("IP address: ");
   Serial.println(WiFi.localIP());
-}
-
-void MQTT_connect() {
-
-  int8_t ret;
-  // Stop if already connected.
-  if (mqtt.connected()) {
-    if (mqttConnectFlag == 0) {
-      Serial.println("Connected");
-      mqttConnectFlag++;
-    }
-    return;
-  }
-  Serial.print("Connecting to MQTT... ");
-  uint8_t retries = 3;
-  while ((ret = mqtt.connect()) != 0) { // connect will return 0 for connected
-    Serial.println(mqtt.connectErrorString(ret));
-    Serial.println("Retrying MQTT connection in 5 seconds...");
-    mqtt.disconnect();
-    delay(5000);  // wait 5 seconds
-    retries--;
-    if (retries == 0) {
-      // basically die and wait for WDT to reset me
-      //while (1);
-      Serial.println("Wait 5 secomds to reconnect");
-      delay(5000);
-    }
-  }
 }

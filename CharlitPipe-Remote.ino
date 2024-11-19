@@ -1,7 +1,11 @@
 
+
+
+
 // ***************************************
 // ********** Global Variables ***********
 // ***************************************
+
 
 //Globals for Wifi Setup and OTA
 #include <credentials.h>
@@ -45,6 +49,7 @@ float mqttConnectFlag = 0.0;
 #define buttonB         D7
 
 //RGB
+#include <Adafruit_NeoPixel.h>
 #define LED_PIN     D8
 #define NUM_LEDS    3
 #define Pixels    3
@@ -55,14 +60,7 @@ float mqttConnectFlag = 0.0;
 #define middlePixel 1
 #define bottomPixel 2
 #define UPDATES_PER_SECOND 100
-CRGB leds[Pixels];
 Adafruit_NeoPixel strip = Adafruit_NeoPixel(NUM_LEDS, LED_PIN, NEO_GRB + NEO_KHZ800);
-CRGBPalette16 currentPalette;
-TBlendType    currentBlending;
-long lastMsg = 0;
-int previousState = 0;
-unsigned long previousMillis = 0;
-unsigned long currentMillis;
 
 //MQTT Startup
 WiFiClient client;
@@ -71,17 +69,24 @@ Adafruit_MQTT_Publish litButton = Adafruit_MQTT_Publish(&mqtt, AIO_USERNAME "/fe
 Adafruit_MQTT_Publish guidingKeyPub = Adafruit_MQTT_Publish(&mqtt, AIO_USERNAME "/feeds/GuidingKey_Status");
 Adafruit_MQTT_Subscribe rideStop = Adafruit_MQTT_Subscribe(&mqtt, AIO_USERNAME "/feeds/CharlitPipe_RideStop");
 
-//State
+//Variables
+long lastMsg = 0;
+int previousState = 0;
+unsigned long previousMillis = 0;
+unsigned long currentMillis;
 int starsMode = 0;
+
+
+
 
 // ***************************************
 // *************** Setup *****************
 // ***************************************
 
+
 void setup() {
 
   //Initialize Leds and Flash White Lights Twice
-  FastLED.addLeds<WS2811, 8, GRB>(leds, Pixels);
   strip.setBrightness(255);
   strip.begin();
   strip.show();
@@ -100,12 +105,10 @@ void setup() {
   strip.show();
   delay(500);
 
-
   //Initialize Buttons
   pinMode(buttonT, INPUT_PULLUP);
   pinMode(buttonM, INPUT_PULLUP);
   pinMode(buttonB, INPUT_PULLUP);
-
   if (digitalRead(buttonT) == LOW) {
     starsMode = 1;
     delay(200);
@@ -117,54 +120,10 @@ void setup() {
     strip.clear();
     strip.show();
   }
-
-  //Initialize WiFi & OTA
-  Serial.begin(115200);
-  Serial.println("Booting");
-  WiFi.mode(WIFI_STA);
-  WiFi.begin(ssid, password);
-  while (WiFi.waitForConnectResult() != WL_CONNECTED) {
-    Serial.println("Connection Failed! Rebooting...");
-    delay(5000);
-    ESP.restart();
-  }
-  ArduinoOTA.setHostname("CharlitRemote");
-  ArduinoOTA.onStart([]() {
-    String type;
-    if (ArduinoOTA.getCommand() == U_FLASH) {
-      type = "sketch";
-    } else { // U_SPIFFS
-      type = "filesystem";
-    }
-    Serial.println("Start updating " + type);
-  });
-  ArduinoOTA.onEnd([]() {
-    Serial.println("\nEnd");
-  });
-  ArduinoOTA.onProgress([](unsigned int progress, unsigned int total) {
-    Serial.printf("Progress: %u%%\r", (progress / (total / 100)));
-  });
-  ArduinoOTA.onError([](ota_error_t error) {
-    Serial.printf("Error[%u]: ", error);
-    if (error == OTA_AUTH_ERROR) {
-      Serial.println("Auth Failed");
-    } else if (error == OTA_BEGIN_ERROR) {
-      Serial.println("Begin Failed");
-    } else if (error == OTA_CONNECT_ERROR) {
-      Serial.println("Connect Failed");
-    } else if (error == OTA_RECEIVE_ERROR) {
-      Serial.println("Receive Failed");
-    } else if (error == OTA_END_ERROR) {
-      Serial.println("End Failed");
-    }
-  });
-  ArduinoOTA.begin();
-  Serial.println("Ready");
-  Serial.print("IP address: ");
-  Serial.println(WiFi.localIP());
-
   setDefaultColors();
 
+  //Initialize Serial, WiFi, & OTA
+  wifiSetup();
 
   //Initialize MQTT
   mqtt.subscribe(&rideStop);
@@ -176,10 +135,16 @@ void setup() {
 // ************* Da Loop *****************
 // ***************************************
 
+
 void loop() {
 
-  if (starsMode == 1) {
-    //Check for Top Button Press, change to FireFlies     
+  //OTA & MQTT
+  ArduinoOTA.handle();
+  MQTT_connect();
+
+  //Check for Top Button Press, change to FireFlies
+  //This is an effort to use this for Hermione on the Stars Lighting Module
+  if (starsMode == 1) {   
     if (digitalRead(buttonT) == LOW) {
       delay(400);
 
@@ -227,7 +192,7 @@ void loop() {
       }
       setDefaultColors();
     }
-
+    
     //Check for Middle Button Press, change to WLed
     if (digitalRead(buttonM) == LOW) {
       delay(10);
@@ -250,6 +215,7 @@ void loop() {
       setDefaultColors();
     }
   }
+  
   //Charlit Mode
   else {
     //Check for Top Button Press
@@ -339,43 +305,18 @@ void loop() {
 }
 
 
+
+
 // ***************************************
 // ********** Backbone Methods ***********
 // ***************************************
 
-void MQTT_connect() {
-  int8_t ret;
-
-  // Stop if already connected.
-  if (mqtt.connected()) {
-    Serial.println("Connected");
-    return;
-  }
-  Serial.print("Connecting to MQTT... ");
-  uint8_t retries = 3;
-
-  while ((ret = mqtt.connect()) != 0) { // connect will return 0 for connected
-    Serial.println(mqtt.connectErrorString(ret));
-    Serial.println("Retrying MQTT connection in 5 seconds...");
-    mqtt.disconnect();
-    delay(5000);  // wait 5 seconds
-    retries--;
-    if (retries == 0) {
-      // basically die and wait for WDT to reset me
-      //while (1);
-      Serial.println("Wait 10 min to reconnect");
-      delay(600000);
-    }
-  }
-  Serial.println("MQTT Connected!");
-}
 
 //Effect for Turbine
 void RunningLights(byte red, byte green, byte blue, int WaveDelay) {
   int Position = 0;
 
-  for (int j = 0; j < NUM_LEDS * 2; j++)
-  {
+  for (int j = 0; j < NUM_LEDS * 2; j++) {
     Position++; // = 0; //Position + Rate;
     for (int i = 0; i < NUM_LEDS; i++) {
       // sine wave, 3 offset waves make a rainbow!
@@ -453,31 +394,9 @@ byte * Wheel(byte WheelPos) {
   return c;
 }
 
-void SetupAuroraPalette() {
-  CRGB darkPurp = CRGB(141, 0, 196);
-  CRGB lightPurp = CRGB(181, 61, 255);
-  CRGB lightBlue = CRGB(1, 126, 213);
-  CRGB lightGreen = CRGB(0, 234, 141);
-  CRGB darkGreen = CRGB(20, 232, 30);
-
-  currentPalette = CRGBPalette16(
-                     darkPurp, lightPurp, lightBlue, lightGreen,
-                     darkGreen, darkPurp, lightPurp, lightBlue,
-                     lightGreen, darkGreen, darkPurp, lightPurp,
-                     lightBlue, lightGreen, darkGreen, darkPurp);
-}
-
-void FillLEDsFromPaletteColors( uint8_t colorIndex) {
-  uint8_t brightness = 255;
-  for ( int i = 0; i < Pixels; i++) {
-    leds[i] = ColorFromPalette( currentPalette, colorIndex, brightness, currentBlending);
-    colorIndex += 3;
-  }
-}
-
 void setPixel(int Pixel, byte red, byte green, byte blue) {
 #ifdef ADAFRUIT_NEOPIXEL_H
-  // NeoPixel
+  // NeoPixe
   strip.setPixelColor(Pixel, strip.Color(red, green, blue));
 #endif
 #ifndef ADAFRUIT_NEOPIXEL_H
@@ -518,4 +437,86 @@ void setDefaultColors() {
     setPixel(bottomPixel, 0, 141, 196);
   }
   strip.show();
+}
+
+void MQTT_connect() {
+
+  int8_t ret;
+  // Stop if already connected.
+  if (mqtt.connected()) {
+    if (mqttConnectFlag == 0) {
+      //Serial.println("Connected");
+      mqttConnectFlag++;
+    }
+    return;
+  }
+  Serial.println("Connecting to MQTT... ");
+  uint8_t retries = 3;
+  while ((ret = mqtt.connect()) != 0) { // connect will return 0 for connected
+    Serial.println(mqtt.connectErrorString(ret));
+    Serial.println("Retrying MQTT connection in 5 seconds...");
+    mqtt.disconnect();
+    delay(5000);  // wait 5 seconds
+    retries--;
+    if (retries == 0) {
+      // basically die and wait for WDT to reset me
+      //while (1);
+      Serial.println("Wait 5 secomds to reconnect");
+      delay(5000);
+    }
+  }
+}
+
+void wifiSetup() {
+
+  //Serial
+  Serial.begin(115200);
+  delay(300);
+  Serial.println();
+  Serial.println();
+  Serial.println("****************************************");
+  Serial.println("Booting");
+
+  //WiFi and OTA
+  WiFi.mode(WIFI_STA);
+  WiFi.begin(ssid, password);
+  while (WiFi.waitForConnectResult() != WL_CONNECTED) {
+    Serial.println("Connection Failed! Rebooting...");
+    delay(5000);
+    ESP.restart();
+  }
+  ArduinoOTA.setHostname("CharlitPipe-Remote");                                                          /** TODO **/
+  ArduinoOTA.onStart([]() {
+    String type;
+    if (ArduinoOTA.getCommand() == U_FLASH) {
+      type = "sketch";
+    } else { // U_SPIFFS
+      type = "filesystem";
+    }
+    Serial.println("Start updating " + type);
+  });
+  ArduinoOTA.onEnd([]() {
+    Serial.println("\nEnd");
+  });
+  ArduinoOTA.onProgress([](unsigned int progress, unsigned int total) {
+    Serial.printf("Progress: %u%%\r", (progress / (total / 100)));
+  });
+  ArduinoOTA.onError([](ota_error_t error) {
+    Serial.printf("Error[%u]: ", error);
+    if (error == OTA_AUTH_ERROR) {
+      Serial.println("Auth Failed");
+    } else if (error == OTA_BEGIN_ERROR) {
+      Serial.println("Begin Failed");
+    } else if (error == OTA_CONNECT_ERROR) {
+      Serial.println("Connect Failed");
+    } else if (error == OTA_RECEIVE_ERROR) {
+      Serial.println("Receive Failed");
+    } else if (error == OTA_END_ERROR) {
+      Serial.println("End Failed");
+    }
+  });
+  ArduinoOTA.begin();
+  Serial.println("Ready");
+  Serial.print("IP address: ");
+  Serial.println(WiFi.localIP());
 }
