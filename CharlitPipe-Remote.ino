@@ -1,9 +1,3 @@
-
-// ***************************************
-// ********** Global Variables ***********
-// ***************************************
-
-
 //Globals for Wifi Setup and OTA
 #include <credentials.h>
 #include <ESP8266WiFi.h>
@@ -40,22 +34,30 @@ const char* password = STAPSK;
 unsigned long previousTime;
 float mqttConnectFlag = 0.0;
 
-#define buttonT         5
-#define buttonM         6
-#define buttonB         7
+#define buttonT         D5
+#define buttonM         D6
+#define buttonB         D7
 
-#define LED_PIN     8
+#define LED_PIN     D8
 #define NUM_LEDS    3
+#define Pixels    3
 #define BRIGHTNESS  255
 #define LED_TYPE    WS2811
 #define COLOR_ORDER GRB
 #define topPixel    0
 #define middlePixel 1
 #define bottomPixel 2
+#define UPDATES_PER_SECOND 100
+CRGB leds[Pixels];
 Adafruit_NeoPixel strip = Adafruit_NeoPixel(NUM_LEDS, LED_PIN, NEO_GRB + NEO_KHZ800);
 
+CRGBPalette16 currentPalette;
+TBlendType    currentBlending;
+
 long lastMsg = 0;
-int status = 0;
+int previousState = 0;
+unsigned long previousMillis = 0;
+unsigned long currentMillis;
 
 //MQTT Startup
 WiFiClient client;
@@ -63,10 +65,10 @@ Adafruit_MQTT_Client mqtt(&client, AIO_SERVER, AIO_SERVERPORT, AIO_USERNAME, AIO
 Adafruit_MQTT_Publish litButton = Adafruit_MQTT_Publish(&mqtt, AIO_USERNAME "/feeds/CharlitPipe_Button");
 
 
-// ***************************************
-// *************** Setup *****************
-// ***************************************
 void setup() {
+
+  FastLED.addLeds<WS2811, 8, GRB>(leds, Pixels);
+
   //Start Pixels (2 white blinks)
   strip.setBrightness(255);
   strip.begin();
@@ -84,6 +86,7 @@ void setup() {
   delay(100);
   strip.clear();
   strip.show();
+  delay(500);
 
 
 
@@ -101,53 +104,79 @@ void setup() {
   Serial.println(WiFi.localIP());
   MQTT_connect();
 
-
-  setPixel(topPixel, 0, 0, 255);
-  setPixel(middlePixel, 0, 255, 0);
-  setPixel(bottomPixel, 0, 131, 206);
-  strip.show();
-
-
   //Set button pins
-  delay(1000);
   pinMode(buttonT, INPUT_PULLUP);
   pinMode(buttonM, INPUT_PULLUP);
   pinMode(buttonB, INPUT_PULLUP);
-  //pinMode(pixels, OUTPUT);
+
+
+
+  //Set initial colors (blue,red,purple)
+  setDefaultColors();
 }
 
-
-// ***************************************
-// ************* Da Loop *****************
-// ***************************************
 void loop() {
-  long now = millis();
 
-  //Button status is checked constantly however,
-  //Publish occurs every ↓ milliseconds with any changes
-  if (now - lastMsg > 1050) {
-    lastMsg = now;
+  //Check for Top Button Press
+  if (digitalRead(buttonT) == LOW) {
+    delay(1);
+    litButton.publish(1);
+    previousState = 1;
+    while (digitalRead(buttonT) == LOW) {
+      SingleFadeInOut(topPixel, 0, 0, 255);
+      SingleFadeInOut(topPixel, 208, 0, 223);
+    }
+    setDefaultColors();
+  }
 
-    //Print a successful publish or failure. Reset status after publish.
-    if (! litButton.publish(status)) {
-      Serial.println("Failed");
+  //Check for Middle Button Press
+  if (digitalRead(buttonM) == LOW) {
+    delay(1);
+    litButton.publish(2);
+    previousState = 2;
+    while (digitalRead(buttonM) == LOW) {
+      singleRainbowCycle(3);
+    }
+    setDefaultColors();
+  }
+
+  //Check for Bottom Button Press
+  if (digitalRead(buttonB) == LOW) {
+    int fiveSecondTimer = 0;
+    delay(250);
+    //rgbMode change check
+    if (digitalRead(buttonB) == LOW && digitalRead(buttonM) == LOW) {
+      litButton.publish(4);
+      delay(1000);
     }
     else {
-      Serial.println("OK!");
+      litButton.publish(3);
+      previousState = 3;
+      fiveSecondTimer = 0;
     }
-    status = 0;
+
+    while ((digitalRead(buttonB) == LOW) && (fiveSecondTimer <= 1750)) {
+      Serial.println(fiveSecondTimer);
+      fiveSecondTimer += 250;
+      SingleFadeInOut(bottomPixel, 0, 141, 196);
+      SingleFadeInOut(bottomPixel, 61, 181, 255);
+      delay(100);
+    }
+
+    while (digitalRead(buttonB) == LOW) {
+      RunningLights(0, 141, 196, 50);
+    }
+    setDefaultColors();
+
   }
-  //Grab button states before publish interval
-  else {
-    if (digitalRead(buttonT) == LOW) {
-      status = 1;
-    }
-    if (digitalRead(buttonM) == LOW) {
-      status = 2;
-    }
-    if (digitalRead(buttonB) == LOW) {
-      status = 3;
-    }
+
+  //Manage the '0' Publish
+  if (previousState != 0) {
+    litButton.publish(0);
+    previousState = 0;
+    currentMillis = 0;
+    setDefaultColors();
+    delay(100);
   }
 
   //Ping Timer
@@ -164,9 +193,6 @@ void loop() {
 }
 
 
-// ***************************************
-// ********** Backbone Methods ***********
-// ***************************************
 void MQTT_connect() {
   int8_t ret;
 
@@ -194,25 +220,115 @@ void MQTT_connect() {
   Serial.println("MQTT Connected!");
 }
 
-void FadeInOut(byte red, byte green, byte blue) {
+void RunningLights(byte red, byte green, byte blue, int WaveDelay) {
+  int Position = 0;
+
+  for (int j = 0; j < NUM_LEDS * 2; j++)
+  {
+    Position++; // = 0; //Position + Rate;
+    for (int i = 0; i < NUM_LEDS; i++) {
+      // sine wave, 3 offset waves make a rainbow!
+      //float level = sin(i+Position) * 127 + 128;
+      //setPixel(i,level,0,0);
+      //float level = sin(i+Position) * 127 + 128;
+      setPixel(i, ((sin(i + Position) * 127 + 128) / 255)*red,
+               ((sin(i + Position) * 127 + 128) / 255)*green,
+               ((sin(i + Position) * 127 + 128) / 255)*blue);
+    }
+
+    showStrip();
+    delay(WaveDelay);
+  }
+}
+
+void SingleFadeInOut(int pixel, byte red, byte green, byte blue) {
   float r, g, b;
 
   for (int k = 0; k < 256; k = k + 1) {
     r = (k / 256.0) * red;
     g = (k / 256.0) * green;
     b = (k / 256.0) * blue;
-    setAll(r, g, b);
+    setPixel(pixel, r, g, b);
     showStrip();
+    delay(1);
+  }
+
+  if (digitalRead(buttonT) == HIGH) {
+    return;
   }
 
   for (int k = 255; k >= 0; k = k - 2) {
     r = (k / 256.0) * red;
     g = (k / 256.0) * green;
     b = (k / 256.0) * blue;
-    setAll(r, g, b);
+    setPixel(pixel, r, g, b);
     showStrip();
+    delay(1);
   }
 }
+
+void singleRainbowCycle(int SpeedDelay) {
+  byte *c;
+  uint16_t i, j;
+
+  for (j = 0; j < 256; j++) { // 5 cycles of all colors on wheel
+    for (i = 0; i < 1; i++) {
+      c = Wheel(((i * 256 / NUM_LEDS) + j) & 255);
+      setPixel(topPixel, *c, *(c + 1), *(c + 2));
+      setPixel(middlePixel, *c, *(c + 1), *(c + 2));
+      setPixel(bottomPixel, *c, *(c + 1), *(c + 2));
+    }
+    showStrip();
+    delay(SpeedDelay);
+  }
+}
+
+byte * Wheel(byte WheelPos) {
+  static byte c[3];
+
+  if (WheelPos < 85) {
+    c[0] = WheelPos * 3;
+    c[1] = 255 - WheelPos * 3;
+    c[2] = 0;
+  } else if (WheelPos < 170) {
+    WheelPos -= 85;
+    c[0] = 255 - WheelPos * 3;
+    c[1] = 0;
+    c[2] = WheelPos * 3;
+  } else {
+    WheelPos -= 170;
+    c[0] = 0;
+    c[1] = WheelPos * 3;
+    c[2] = 255 - WheelPos * 3;
+  }
+
+  return c;
+}
+
+void SetupAuroraPalette() {
+  CRGB darkPurp = CRGB(141, 0, 196);
+  CRGB lightPurp = CRGB(181, 61, 255);
+  CRGB lightBlue = CRGB(1, 126, 213);
+  CRGB lightGreen = CRGB(0, 234, 141);
+  CRGB darkGreen = CRGB(20, 232, 30);
+
+  currentPalette = CRGBPalette16(
+                     darkPurp, lightPurp, lightBlue, lightGreen,
+                     darkGreen, darkPurp, lightPurp, lightBlue,
+                     lightGreen, darkGreen, darkPurp, lightPurp,
+                     lightBlue, lightGreen, darkGreen, darkPurp);
+}
+
+void FillLEDsFromPaletteColors( uint8_t colorIndex) {
+  uint8_t brightness = 255;
+
+  for ( int i = 0; i < Pixels; i++) {
+    leds[i] = ColorFromPalette( currentPalette, colorIndex, brightness, currentBlending);
+    colorIndex += 3;
+  }
+}
+
+
 
 void setPixel(int Pixel, byte red, byte green, byte blue) {
 #ifdef ADAFRUIT_NEOPIXEL_H
@@ -227,7 +343,6 @@ void setPixel(int Pixel, byte red, byte green, byte blue) {
 #endif
 }
 
-// Set all LEDs to a given color and apply it (visible)
 void setAll(byte red, byte green, byte blue) {
   for (int i = 0; i < NUM_LEDS; i++ ) {
     setPixel(i, red, green, blue);
@@ -235,7 +350,6 @@ void setAll(byte red, byte green, byte blue) {
   showStrip();
 }
 
-// Apply LED color changes
 void showStrip() {
 #ifdef ADAFRUIT_NEOPIXEL_H
   // NeoPixel
@@ -245,4 +359,11 @@ void showStrip() {
   // FastLED
   FastLED.show();
 #endif
+}
+
+void setDefaultColors() {
+  setPixel(topPixel, 0, 0, 255);
+  setPixel(middlePixel, 0, 255, 0);
+  setPixel(bottomPixel, 0, 141, 196);
+  strip.show();
 }
