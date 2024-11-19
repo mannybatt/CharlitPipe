@@ -1,3 +1,8 @@
+
+// ***************************************
+// ********** Global Variables ***********
+// ***************************************
+
 //Globals for Wifi Setup and OTA
 #include <credentials.h>
 #include <ESP8266WiFi.h>
@@ -34,10 +39,12 @@ const char* password = STAPSK;
 unsigned long previousTime;
 float mqttConnectFlag = 0.0;
 
+//Button Pins
 #define buttonT         D5
 #define buttonM         D6
 #define buttonB         D7
 
+//RGB
 #define LED_PIN     D8
 #define NUM_LEDS    3
 #define Pixels    3
@@ -50,10 +57,8 @@ float mqttConnectFlag = 0.0;
 #define UPDATES_PER_SECOND 100
 CRGB leds[Pixels];
 Adafruit_NeoPixel strip = Adafruit_NeoPixel(NUM_LEDS, LED_PIN, NEO_GRB + NEO_KHZ800);
-
 CRGBPalette16 currentPalette;
 TBlendType    currentBlending;
-
 long lastMsg = 0;
 int previousState = 0;
 unsigned long previousMillis = 0;
@@ -63,13 +68,20 @@ unsigned long currentMillis;
 WiFiClient client;
 Adafruit_MQTT_Client mqtt(&client, AIO_SERVER, AIO_SERVERPORT, AIO_USERNAME, AIO_KEY);
 Adafruit_MQTT_Publish litButton = Adafruit_MQTT_Publish(&mqtt, AIO_USERNAME "/feeds/CharlitPipe_Button");
+Adafruit_MQTT_Publish guidingKeyPub = Adafruit_MQTT_Publish(&mqtt, AIO_USERNAME "/feeds/GuidingKey_Status");
+Adafruit_MQTT_Subscribe rideStop = Adafruit_MQTT_Subscribe(&mqtt, AIO_USERNAME "/feeds/CharlitPipe_RideStop");
 
+//State
+int starsMode = 0;
+
+// ***************************************
+// *************** Setup *****************
+// ***************************************
 
 void setup() {
 
+  //Initialize Leds and Flash White Lights Twice
   FastLED.addLeds<WS2811, 8, GRB>(leds, Pixels);
-
-  //Start Pixels (2 white blinks)
   strip.setBrightness(255);
   strip.begin();
   strip.show();
@@ -89,8 +101,24 @@ void setup() {
   delay(500);
 
 
+  //Initialize Buttons
+  pinMode(buttonT, INPUT_PULLUP);
+  pinMode(buttonM, INPUT_PULLUP);
+  pinMode(buttonB, INPUT_PULLUP);
 
-  //Establish Connection
+  if (digitalRead(buttonT) == LOW) {
+    starsMode = 1;
+    delay(200);
+    setPixel(topPixel, 0, 0, 255);
+    setPixel(middlePixel, 0, 0, 255);
+    setPixel(bottomPixel, 0, 0, 255);
+    strip.show();
+    delay(70);
+    strip.clear();
+    strip.show();
+  }
+
+  //Initialize WiFi & OTA
   Serial.begin(115200);
   Serial.println("Booting");
   WiFi.mode(WIFI_STA);
@@ -100,98 +128,220 @@ void setup() {
     delay(5000);
     ESP.restart();
   }
-  Serial.print("Connected! IP Address: ");
+  ArduinoOTA.setHostname("CharlitRemote");
+  ArduinoOTA.onStart([]() {
+    String type;
+    if (ArduinoOTA.getCommand() == U_FLASH) {
+      type = "sketch";
+    } else { // U_SPIFFS
+      type = "filesystem";
+    }
+    Serial.println("Start updating " + type);
+  });
+  ArduinoOTA.onEnd([]() {
+    Serial.println("\nEnd");
+  });
+  ArduinoOTA.onProgress([](unsigned int progress, unsigned int total) {
+    Serial.printf("Progress: %u%%\r", (progress / (total / 100)));
+  });
+  ArduinoOTA.onError([](ota_error_t error) {
+    Serial.printf("Error[%u]: ", error);
+    if (error == OTA_AUTH_ERROR) {
+      Serial.println("Auth Failed");
+    } else if (error == OTA_BEGIN_ERROR) {
+      Serial.println("Begin Failed");
+    } else if (error == OTA_CONNECT_ERROR) {
+      Serial.println("Connect Failed");
+    } else if (error == OTA_RECEIVE_ERROR) {
+      Serial.println("Receive Failed");
+    } else if (error == OTA_END_ERROR) {
+      Serial.println("End Failed");
+    }
+  });
+  ArduinoOTA.begin();
+  Serial.println("Ready");
+  Serial.print("IP address: ");
   Serial.println(WiFi.localIP());
-  MQTT_connect();
 
-  //Set button pins
-  pinMode(buttonT, INPUT_PULLUP);
-  pinMode(buttonM, INPUT_PULLUP);
-  pinMode(buttonB, INPUT_PULLUP);
-
-
-
-  //Set initial colors (blue,red,purple)
   setDefaultColors();
+
+
+  //Initialize MQTT
+  mqtt.subscribe(&rideStop);
+  MQTT_connect();
 }
+
+
+// ***************************************
+// ************* Da Loop *****************
+// ***************************************
 
 void loop() {
 
-  //Check for Top Button Press
-  if (digitalRead(buttonT) == LOW) {
-    delay(1);
-    litButton.publish(1);
-    previousState = 1;
-    while (digitalRead(buttonT) == LOW) {
-      SingleFadeInOut(topPixel, 0, 0, 255);
-      SingleFadeInOut(topPixel, 208, 0, 223);
+  if (starsMode == 1) {
+    //Check for Top Button Press, change to FireFlies     
+    if (digitalRead(buttonT) == LOW) {
+      delay(400);
+
+      //Lower Twinkle Stars
+      if (digitalRead(buttonT) == LOW && digitalRead(buttonB) == LOW) {
+        guidingKeyPub.publish(3);
+        previousState = 13;
+        while (digitalRead(buttonT) == LOW) {
+          SingleFadeInOut(topPixel, 0, 170, 255);
+          while(digitalRead(buttonB) == LOW){
+            guidingKeyPub.publish(3);
+            SingleFadeInOut(topPixel, 0, 170, 255);
+            SingleFadeInOut(bottomPixel, 0, 255, 0);
+            while (digitalRead(buttonT) == LOW && digitalRead(buttonB) == LOW){
+              SingleFadeInOut(topPixel, 0, 170, 255);
+              SingleFadeInOut(bottomPixel, 0, 255, 0);
+            }
+          }
+        }
+      }
+
+      //Raise Twinkle Stars
+      if (digitalRead(buttonT) == LOW && digitalRead(buttonM) == LOW) {
+        guidingKeyPub.publish(4);
+        previousState = 14;
+        while (digitalRead(buttonT) == LOW) {
+          SingleFadeInOut(topPixel, 0, 170, 255);
+          while(digitalRead(buttonM) == LOW){
+            guidingKeyPub.publish(3);            
+            while (digitalRead(buttonT) == LOW && digitalRead(buttonM) == LOW){
+              SingleFadeInOut(topPixel, 0, 170, 255);
+              SingleFadeInOut(middlePixel, 255, 0, 0);
+            }
+          }
+        }
+      }
+      
+      //Change to the Twinkle Stars
+      else{
+      guidingKeyPub.publish(2);
+      previousState = 10;
+      while (digitalRead(buttonT) == LOW) {
+        SingleFadeInOut(topPixel, 0, 170, 255);
+      }
+      }
+      setDefaultColors();
     }
-    setDefaultColors();
+
+    //Check for Middle Button Press, change to WLed
+    if (digitalRead(buttonM) == LOW) {
+      delay(10);
+      guidingKeyPub.publish(1);
+      previousState = 11;
+      while (digitalRead(buttonM) == LOW) {
+        SingleFadeInOut(middlePixel, 220, 0, 255);
+      }
+      setDefaultColors();
+    }
+
+    //Check for Bottom Button Press
+    if (digitalRead(buttonB) == LOW) {
+      delay(10);
+      guidingKeyPub.publish(0);
+      previousState = 12;
+      while (digitalRead(buttonB) == LOW) {
+        SingleFadeInOut(bottomPixel, 255, 0, 40);
+      }
+      setDefaultColors();
+    }
   }
-
-  //Check for Middle Button Press
-  if (digitalRead(buttonM) == LOW) {
-    delay(1);
-    litButton.publish(2);
-    previousState = 2;
-    while (digitalRead(buttonM) == LOW) {
-      singleRainbowCycle(3);
-    }
-    setDefaultColors();
-  }
-
-  //Check for Bottom Button Press
-  if (digitalRead(buttonB) == LOW) {
-    int fiveSecondTimer = 0;
-    delay(250);
-    //rgbMode change check
-    if (digitalRead(buttonB) == LOW && digitalRead(buttonM) == LOW) {
-      litButton.publish(4);
-      delay(1000);
-    }
-    else {
-      litButton.publish(3);
-      previousState = 3;
-      fiveSecondTimer = 0;
+  //Charlit Mode
+  else {
+    //Check for Top Button Press
+    if (digitalRead(buttonT) == LOW) {
+      delay(1);
+      litButton.publish(1);
+      previousState = 1;
+      while (digitalRead(buttonT) == LOW) {
+        SingleFadeInOut(topPixel, 0, 0, 255);
+        SingleFadeInOut(topPixel, 208, 0, 223);
+      }
+      setDefaultColors();
     }
 
-    while ((digitalRead(buttonB) == LOW) && (fiveSecondTimer <= 1750)) {
-      Serial.println(fiveSecondTimer);
-      fiveSecondTimer += 250;
-      SingleFadeInOut(bottomPixel, 0, 141, 196);
-      SingleFadeInOut(bottomPixel, 61, 181, 255);
+    //Check for Middle Button Press
+    if (digitalRead(buttonM) == LOW) {
+      delay(1);
+      litButton.publish(2);
+      previousState = 2;
+      while (digitalRead(buttonM) == LOW) {
+        singleRainbowCycle(3);
+      }
+      setDefaultColors();
+    }
+
+    //Check for Bottom Button Press
+    if (digitalRead(buttonB) == LOW) {
+      int fiveSecondTimer = 0;
+      delay(400);
+      //RGBMode change - Check for bottom and middle button press
+      if (digitalRead(buttonB) == LOW && digitalRead(buttonM) == LOW) {
+        litButton.publish(4);
+        setPixel(topPixel, 126, 242, 2);
+        setPixel(middlePixel, 126, 242, 2);
+        setPixel(bottomPixel, 126, 242, 2);
+        strip.show();
+        delay(1001);
+      }
+      //DramaticMode Change - Check for bottom and top button press
+      else if (digitalRead(buttonB) == LOW && digitalRead(buttonT) == LOW) {
+        litButton.publish(5);
+        setPixel(topPixel, 255, 0, 0);
+        setPixel(middlePixel, 255, 0, 0);
+        setPixel(bottomPixel, 255, 0, 0);
+        strip.show();
+        delay(1001);
+      }
+      //Normal Bottom Operation
+      else {
+        litButton.publish(3);
+        previousState = 3;
+        fiveSecondTimer = 0;
+      }
+      //Glow Bottom button while pressed
+      while ((digitalRead(buttonB) == LOW) && (fiveSecondTimer <= 1750)) {
+        Serial.println(fiveSecondTimer);
+        fiveSecondTimer += 250;
+        SingleFadeInOut(bottomPixel, 0, 141, 196);
+        SingleFadeInOut(bottomPixel, 61, 181, 255);
+        delay(100);
+      }
+      //Start RGB Effect after turbine activates
+      while (digitalRead(buttonB) == LOW) {
+        RunningLights(0, 141, 196, 50);
+      }
+      setDefaultColors();
+    }
+
+    //Manage the '0' Publish, j
+    if (previousState != 0) {
+      litButton.publish(0);
+      previousState = 0;
+      currentMillis = 0;
+      setDefaultColors();
       delay(100);
     }
-
-    while (digitalRead(buttonB) == LOW) {
-      RunningLights(0, 141, 196, 50);
-    }
-    setDefaultColors();
-
-  }
-
-  //Manage the '0' Publish
-  if (previousState != 0) {
-    litButton.publish(0);
-    previousState = 0;
-    currentMillis = 0;
-    setDefaultColors();
-    delay(100);
   }
 
   //Ping Timer
-  uint8_t secondHand = (millis() / 1000) % 10  /*60*/;
-  static uint8_t lastSecond = 99;
-  if (lastSecond != secondHand) {
-    lastSecond = secondHand;
-    if (secondHand == 240 /*4 Mins.*/) {
-      if (! mqtt.ping()) {
-        mqtt.disconnect();
-      }
+  unsigned long currentTime = millis();
+  if ((currentTime - previousTime) > MQTT_KEEP_ALIVE * 1000) {
+    previousTime = currentTime;
+    if (! mqtt.ping()) {
+      mqtt.disconnect();
     }
   }
 }
 
+
+// ***************************************
+// ********** Backbone Methods ***********
+// ***************************************
 
 void MQTT_connect() {
   int8_t ret;
@@ -220,6 +370,7 @@ void MQTT_connect() {
   Serial.println("MQTT Connected!");
 }
 
+//Effect for Turbine
 void RunningLights(byte red, byte green, byte blue, int WaveDelay) {
   int Position = 0;
 
@@ -235,15 +386,14 @@ void RunningLights(byte red, byte green, byte blue, int WaveDelay) {
                ((sin(i + Position) * 127 + 128) / 255)*green,
                ((sin(i + Position) * 127 + 128) / 255)*blue);
     }
-
     showStrip();
     delay(WaveDelay);
   }
 }
 
+//Effect for 2nd valve
 void SingleFadeInOut(int pixel, byte red, byte green, byte blue) {
   float r, g, b;
-
   for (int k = 0; k < 256; k = k + 1) {
     r = (k / 256.0) * red;
     g = (k / 256.0) * green;
@@ -252,11 +402,9 @@ void SingleFadeInOut(int pixel, byte red, byte green, byte blue) {
     showStrip();
     delay(1);
   }
-
   if (digitalRead(buttonT) == HIGH) {
     return;
   }
-
   for (int k = 255; k >= 0; k = k - 2) {
     r = (k / 256.0) * red;
     g = (k / 256.0) * green;
@@ -267,10 +415,10 @@ void SingleFadeInOut(int pixel, byte red, byte green, byte blue) {
   }
 }
 
+//Effect for Drain
 void singleRainbowCycle(int SpeedDelay) {
   byte *c;
   uint16_t i, j;
-
   for (j = 0; j < 256; j++) { // 5 cycles of all colors on wheel
     for (i = 0; i < 1; i++) {
       c = Wheel(((i * 256 / NUM_LEDS) + j) & 255);
@@ -283,6 +431,7 @@ void singleRainbowCycle(int SpeedDelay) {
   }
 }
 
+//Color Wheel (Drain effect)
 byte * Wheel(byte WheelPos) {
   static byte c[3];
 
@@ -301,7 +450,6 @@ byte * Wheel(byte WheelPos) {
     c[1] = WheelPos * 3;
     c[2] = 255 - WheelPos * 3;
   }
-
   return c;
 }
 
@@ -321,14 +469,11 @@ void SetupAuroraPalette() {
 
 void FillLEDsFromPaletteColors( uint8_t colorIndex) {
   uint8_t brightness = 255;
-
   for ( int i = 0; i < Pixels; i++) {
     leds[i] = ColorFromPalette( currentPalette, colorIndex, brightness, currentBlending);
     colorIndex += 3;
   }
 }
-
-
 
 void setPixel(int Pixel, byte red, byte green, byte blue) {
 #ifdef ADAFRUIT_NEOPIXEL_H
@@ -362,8 +507,15 @@ void showStrip() {
 }
 
 void setDefaultColors() {
-  setPixel(topPixel, 0, 0, 255);
-  setPixel(middlePixel, 0, 255, 0);
-  setPixel(bottomPixel, 0, 141, 196);
+  if (starsMode == 1) {
+    setPixel(topPixel, 0, 170, 255);
+    setPixel(middlePixel, 220, 0, 255);
+    setPixel(bottomPixel, 255, 0, 40);
+  }
+  else {
+    setPixel(topPixel, 0, 0, 255);
+    setPixel(middlePixel, 0, 255, 0);
+    setPixel(bottomPixel, 0, 141, 196);
+  }
   strip.show();
 }
